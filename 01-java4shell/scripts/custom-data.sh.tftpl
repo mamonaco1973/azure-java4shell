@@ -1,6 +1,6 @@
 #!/bin/bash
 # ================================================================================
-# userdata.sh (rendered per node from userdata.sh.tftpl)
+# custom-data.sh (rendered per node from custom-data.sh.tftpl)
 # Runs once on first boot via cloud-init. Installs the pinned Amazon Corretto
 # builds for ALL THREE affected trains (17 / 21 / 25), stands up a minimal
 # Base64-decode service (the realistic exposure surface for CVE-2026-114938) on
@@ -12,11 +12,11 @@
 # instance and is expanded by bash there, not by Terraform.
 #
 # >>> This host is intentionally vulnerable by design. It lives in a private
-#     subnet with no inbound path and is reachable only via SSM. Do not deploy
+#     subnet with no inbound path and is reachable only via Run Command. Do not deploy
 #     it to a production account or expose it to untrusted networks. <<<
 # ================================================================================
 
-exec > /root/userdata.log 2>&1
+exec > /root/custom-data.log 2>&1
 set -x
 export DEBIAN_FRONTEND=noninteractive
 
@@ -40,7 +40,7 @@ mkdir -p "$${APPDIR}"
 # Packages
 # ForceIPv4: arm64 pulls from ports.ubuntu.com, whose AAAA records resolve on
 # instances with no IPv6, costing failed attempts per repo before IPv4 fallback.
-# apache2 serves the verdict page (localhost / SSM-tunnel only).
+# apache2 serves the verdict page (localhost only; read it over Run Command).
 # ------------------------------------------------------------------------------
 echo "NOTE: installing packages..."
 apt-get -o Acquire::ForceIPv4=true update -y
@@ -51,7 +51,7 @@ apt-get -o Acquire::ForceIPv4=true install -y apache2 curl ca-certificates tar
 # A host carrying several JDKs is the realistic case the detector is built for:
 # check-exposure.sh judges EVERY installed JDK and the node's verdict is the
 # worst across them. A failed download never aborts the node — it stays
-# reachable over SSM and the detector simply reports on whatever installed.
+# reachable over Run Command and the detector simply reports on whatever installed.
 # ------------------------------------------------------------------------------
 INSTALLED=0
 mapfile -t JDK_LINES <<< "$${JDKS}"
@@ -203,7 +203,7 @@ chmod +x "$${APPDIR}/check-exposure.sh"
 
 # ------------------------------------------------------------------------------
 # exposure-check.sh — thin lab wrapper. Runs the detector above, then publishes
-# this node's verdict as a page and echoes the keys validate.sh / lab-verdicts.sh / patch.sh parse over SSM,
+# this node's verdict as a page and echoes the keys validate.sh / lab-verdicts.sh / patch.sh parse over Run Command,
 # INCLUDING one JVM| line per installed JDK so the operator tooling can show
 # every train's individual verdict. It holds no detection logic of its own.
 # ------------------------------------------------------------------------------
@@ -261,7 +261,7 @@ cat > /var/www/html/verdict.json <<JSON
 {"role":"$${NODE_ROLE}","deployment":"$${DEPLOYMENT}","java_version":"$${VER}","arch":"$${ARCH}","avx512_vbmi":"$${VBMI}","mitigated":"$${MIT}","verdict":"$${VERDICT}","expected":"$${EXPECTED}","reason":"$${REASON}","jdk_count":"$${JDK_COUNT}","jdks":[$${JDKS_JSON}]}
 JSON
 
-# --- verdict page (reachable via SSM port-forward to :80) ---
+# --- verdict page (curl localhost over Run Command) ---
 cat > /var/www/html/index.html <<HTML
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
@@ -335,4 +335,4 @@ fi
 echo "NOTE: computing initial exposure verdict..."
 "$${APPDIR}/exposure-check.sh" || true
 
-echo "NOTE: userdata complete for node $${NODE_ROLE} ($${INSTALLED} JDK(s) installed)."
+echo "NOTE: custom data complete for node $${NODE_ROLE} ($${INSTALLED} JDK(s) installed)."

@@ -1,8 +1,8 @@
 # ================================================================================
 # Deployment Identity
 # Every named resource derives from local.name so the whole stack can be
-# deployed more than once in the same account and region without colliding on
-# account-global (IAM) or region-global names. The suffix is generated once and
+# deployed more than once in the same subscription without colliding on
+# resource group or other subscription-wide names. The suffix is generated once and
 # held in state, so it is stable across repeated applies of the same deployment.
 # ================================================================================
 
@@ -83,21 +83,21 @@ locals {
   # Node definitions — the one place that describes every machine.
   # Three nodes, one per CPU class, each carrying ALL THREE vulnerable trains:
   #
-  #   vuln-x86    c7i.large  x86-64 WITH AVX-512 VBMI   -> EXPOSED
-  #   safe-arm    t4g.micro  Graviton ARM64 (no VBMI)   -> NOT_EXPOSED (CPU-immune)
-  #   safe-intel  t3.micro   x86-64 WITHOUT AVX-512 VBMI-> NOT_EXPOSED (CPU-immune)
+  #   vuln-x86    Standard_D2s_v6    x86-64 WITH AVX-512 VBMI    -> EXPOSED
+  #   safe-arm    Standard_D2pls_v6  Cobalt 100 ARM64 (no VBMI)  -> NOT_EXPOSED (CPU-immune)
+  #   safe-intel  Standard_B1s       x86-64 WITHOUT AVX-512 VBMI -> NOT_EXPOSED (CPU-immune)
   #
   # The three nodes carry the same three vulnerable JDKs; only the CPU differs,
   # which is the whole point — exposure is CPU-bound, so the detector must find
   # all three JDKs AND gate on the instruction set. instances.tf iterates this
-  # map; each node's userdata installs its arch-matched `jdks` list.
+  # map; each node's cloud-init script installs its arch-matched `jdks` list.
   # ------------------------------------------------------------------------------
   nodes = {
     "vuln-x86" = {
       role     = "vuln-x86"
-      ami      = data.aws_ami.ubuntu_x86.id
-      instance = var.x86_instance_type
-      subnet   = aws_subnet.private_a.id
+      image    = local.image_x86
+      size     = var.x86_vm_size
+      disk_ctl = "NVMe" # Dsv6 sizes have no SCSI controller
       arch     = "x64"
       jdks     = local.affected_jdks_x64
       expected = "EXPOSED"
@@ -105,9 +105,9 @@ locals {
     }
     "safe-arm" = {
       role     = "safe-arm"
-      ami      = data.aws_ami.ubuntu_arm.id
-      instance = var.arm_instance_type
-      subnet   = aws_subnet.private_b.id
+      image    = local.image_arm
+      size     = var.arm_vm_size
+      disk_ctl = "SCSI"
       arch     = "aarch64"
       jdks     = local.affected_jdks_arm
       expected = "NOT_EXPOSED"
@@ -115,9 +115,9 @@ locals {
     }
     "safe-intel" = {
       role     = "safe-intel"
-      ami      = data.aws_ami.ubuntu_x86.id
-      instance = var.intel_novbmi_instance_type
-      subnet   = aws_subnet.private_a.id
+      image    = local.image_x86
+      size     = var.intel_novbmi_vm_size
+      disk_ctl = "SCSI"
       arch     = "x64"
       jdks     = local.affected_jdks_x64
       expected = "NOT_EXPOSED"

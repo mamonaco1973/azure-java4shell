@@ -4,7 +4,7 @@ set -uo pipefail
 # ================================================================================
 # patch.sh — remediate a node in place by upgrading its JDKs
 # Every node carries all three affected trains (17 / 21 / 25). This script
-# downloads each train's FIXED Corretto build over SSM, installs it, repoints the
+# downloads each train's FIXED Corretto build over Run Command, installs it, repoints the
 # decoder's JDK symlink to the fixed decoder train, REMOVES the vulnerable builds
 # (the detector scans every installed JDK, so a lingering vulnerable one keeps the
 # host EXPOSED), restarts the decoder, and re-runs the on-box exposure check to
@@ -27,8 +27,8 @@ set -uo pipefail
 # ================================================================================
 
 CHDIR="01-java4shell"
-REGION=$(terraform -chdir="$CHDIR" output -raw region 2>/dev/null || true)
-if [ -z "${REGION}" ]; then
+RG=$(terraform -chdir="$CHDIR" output -raw resource_group 2>/dev/null || true)
+if [ -z "${RG}" ]; then
   echo "ERROR: could not read Terraform outputs. Run ./apply.sh first."
   exit 1
 fi
@@ -53,18 +53,16 @@ else
   fi
 fi
 
-# Run a command on an instance over SSM and echo its stdout.
+# Run a command on a node with Azure Run Command and echo its stdout. Run
+# Command returns stdout and stderr together in one message, as
+# "[stdout]\n...\n[stderr]\n..."; keep only the stdout section. The script runs
+# as root under /bin/sh.
 run_onbox() {
-  local id="$1" cmd="$2" cid params
-  params=$(jq -nc --arg c "${cmd}" '{commands:[$c]}')
-  cid=$(aws ssm send-command --region "${REGION}" --instance-ids "${id}" \
-    --document-name "AWS-RunShellScript" --parameters "${params}" \
-    --query 'Command.CommandId' --output text)
-  aws ssm wait command-executed --region "${REGION}" \
-    --command-id "${cid}" --instance-id "${id}" >/dev/null 2>&1 || true
-  aws ssm get-command-invocation --region "${REGION}" \
-    --command-id "${cid}" --instance-id "${id}" \
-    --query 'StandardOutputContent' --output text
+  local vm="$1" cmd="$2" msg
+  msg=$(az vm run-command invoke --resource-group "${RG}" --name "${vm}" \
+    --command-id RunShellScript --scripts "${cmd}" \
+    --query 'value[0].message' --output tsv 2>/dev/null) || true
+  printf '%s\n' "${msg}" | awk '/^\[stdout\]$/ {on=1; next} /^\[stderr\]$/ {on=0} on'
 }
 
 patch_one() {
@@ -95,7 +93,7 @@ patch_one() {
   # On-box remediation. JLIST and DECODER_MAJOR are expanded HERE by patch.sh;
   # everything else ($VAR) stays literal for the remote shell.
   #
-  # NOTE: SSM AWS-RunShellScript runs this under /bin/sh (dash), not bash, so the
+  # NOTE: Run Command's RunShellScript runs this under /bin/sh (dash), not bash, so the
   # remote half must stay POSIX — no here-strings, mapfile, or [[ ]]. The JDK
   # list goes through a temp file (not `<<<`), which also keeps the loop in the
   # current shell so NEWDIRS survives for the prune step.

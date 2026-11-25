@@ -3,14 +3,14 @@ set -euo pipefail
 
 # ================================================================================
 # Environment Check
-# Validates required tools are installed and AWS credentials are active. This lab
-# drives the nodes entirely over SSM, so jq is required (the operator scripts
-# build SSM payloads and parse JSON output with it).
+# Validates required tools are installed and Azure credentials are active. This
+# lab drives the nodes entirely over Azure Run Command, so jq is required (the
+# operator scripts parse Terraform's JSON outputs with it).
 # ================================================================================
 
 echo "NOTE: Validating that required commands are found in your PATH."
 
-for cmd in aws terraform jq; do
+for cmd in az terraform jq; do
   if ! command -v "$cmd" &>/dev/null; then
     echo "ERROR: $cmd is not found in PATH."
     exit 1
@@ -21,18 +21,30 @@ done
 echo "NOTE: All required commands are available."
 
 # ------------------------------------------------------------------------------
-# AWS Credentials
-# sts get-caller-identity is the cheapest way to confirm credentials are active
+# Azure Credentials
+# Terraform authenticates with the ARM_* service principal variables; the az
+# CLI (used by the operator scripts) logs in with the same service principal.
 # ------------------------------------------------------------------------------
 
-echo "NOTE: Checking AWS CLI connection."
+echo "NOTE: Validating that required environment variables are set."
 
-if ! aws sts get-caller-identity &>/dev/null; then
-  echo "ERROR: AWS credentials are not configured or have expired."
+for var in ARM_CLIENT_ID ARM_CLIENT_SECRET ARM_SUBSCRIPTION_ID ARM_TENANT_ID; do
+  if [ -z "${!var:-}" ]; then
+    echo "ERROR: $var is not set or is empty."
+    exit 1
+  fi
+  echo "NOTE: $var is set."
+done
+
+echo "NOTE: Logging in to Azure using Service Principal..."
+if ! az login --service-principal --username "$ARM_CLIENT_ID" \
+    --password "$ARM_CLIENT_SECRET" --tenant "$ARM_TENANT_ID" > /dev/null 2>&1; then
+  echo "ERROR: Failed to log into Azure. Please check your credentials and environment variables."
   exit 1
 fi
+az account set --subscription "$ARM_SUBSCRIPTION_ID"
 
-echo "NOTE: Successfully connected to AWS."
+echo "NOTE: Successfully logged into Azure."
 
 # ------------------------------------------------------------------------------
 # Corretto build preflight (WARNING only, never blocks apply)

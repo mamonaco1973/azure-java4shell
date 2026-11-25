@@ -11,25 +11,31 @@ output "deployment_name" {
   value       = local.name
 }
 
-output "region" {
-  description = "Region the stack is deployed in"
-  value       = var.region
+output "resource_group" {
+  description = "Resource group holding the whole lab"
+  value       = azurerm_resource_group.lab.name
 }
 
-# Map of role -> instance ID, e.g. {"vuln-x86" = "i-0abc...", ...}
+output "location" {
+  description = "Azure region the stack is deployed in"
+  value       = azurerm_resource_group.lab.location
+}
+
+# Map of role -> VM name, e.g. {"vuln-x86" = "java4shell-k3n8q2-vuln-x86", ...}
+# The operator scripts pass these to `az vm run-command invoke`.
 output "node_ids" {
-  description = "Instance ID for each lab node, keyed by role"
-  value       = { for role, inst in aws_instance.node : role => inst.id }
+  description = "VM name for each lab node, keyed by role"
+  value       = { for role, vm in azurerm_linux_virtual_machine.node : role => vm.name }
 }
 
-# Map of role -> private IP (handy when opening an SSM port-forward)
+# Map of role -> private IP
 output "node_private_ips" {
   description = "Private IP for each lab node, keyed by role"
-  value       = { for role, inst in aws_instance.node : role => inst.private_ip }
+  value       = { for role, vm in azurerm_linux_virtual_machine.node : role => vm.private_ip_address }
 }
 
-# Map of role -> the verdict the lab is designed to produce. validate.sh asserts
-# the live verdict against this; patch.sh patches the EXPOSED ones by default.
+# Map of role -> the verdict the lab is designed to produce. patch.sh patches
+# the EXPOSED ones by default.
 output "node_expected" {
   description = "Intended exposure verdict for each node, keyed by role"
   value       = { for role, node in local.nodes : role => node.expected }
@@ -57,7 +63,7 @@ output "patch_jdks" {
   value       = local.patch_jdks
 }
 
-output "ssm_portforward_hint" {
-  description = "How to reach a node's verdict page over SSM (no port is exposed)"
-  value       = "aws ssm start-session --region ${var.region} --target <node_id> --document-name AWS-StartPortForwardingSession --parameters '{\"portNumber\":[\"80\"],\"localPortNumber\":[\"8088\"]}' then open http://localhost:8088/"
+output "run_command_hint" {
+  description = "How to read a node's verdict page over Run Command (no port is exposed)"
+  value       = "az vm run-command invoke -g ${azurerm_resource_group.lab.name} -n <vm name> --command-id RunShellScript --scripts 'curl -s localhost/verdict.json' --query 'value[0].message' -o tsv"
 }

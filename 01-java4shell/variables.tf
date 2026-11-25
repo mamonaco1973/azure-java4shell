@@ -6,41 +6,44 @@
 # CVE-2026-114938 or not.
 # ================================================================================
 
-variable "region" {
-  description = "AWS region for the whole stack"
+variable "location" {
+  description = "Azure region for the whole stack"
   type        = string
-  default     = "us-east-2"
+  default     = "Central US"
 }
 
 # --------------------------------------------------------------------------------
-# Instance types — the lab turns on the CPU distinction, so these are chosen
+# VM sizes — the lab turns on the CPU distinction, so these are chosen
 # deliberately:
-#   x86_instance_type        c7i (Sapphire Rapids) — HAS AVX-512 VBMI, so the
-#                            vulnerable intrinsic can run. The floor for VBMI is
-#                            a .large; c6i.large (Ice Lake) is a cheaper swap.
-#   intel_novbmi_instance_type  t3 (Skylake/Cascade Lake) — x86 but NO VBMI, so
-#                            it is immune by HARDWARE despite being Intel. This
-#                            is the whole point of the safe-intel node: not all
-#                            x86 is affected, only the chips with the instruction.
-#   arm_instance_type        t4g (Graviton2, ARM64) — no AVX-512 at all, immune.
+#   x86_vm_size           Dsv6 (Intel Emerald Rapids) — HAS AVX-512 VBMI, so the
+#                         vulnerable intrinsic can run. Dasv6/Dalsv6 (AMD Genoa)
+#                         also carry VBMI.
+#   intel_novbmi_vm_size  B1s (Intel Haswell through Cascade Lake) — x86 but NO
+#                         VBMI, so it is immune by HARDWARE despite being Intel.
+#                         Not all x86 is affected, only chips with the
+#                         instruction.
+#   arm_vm_size           Dplsv6 (Azure Cobalt 100, ARM64) — no AVX-512 at all,
+#                         immune.
+# validate.sh prints each node's VBMI flag, so a size that lands on unexpected
+# hardware shows up immediately.
 # --------------------------------------------------------------------------------
 
-variable "x86_instance_type" {
-  description = "x86-64 nodes that MUST support AVX-512 VBMI (c7i / c6i / m6i / c7a)"
+variable "x86_vm_size" {
+  description = "x86-64 node that MUST support AVX-512 VBMI (Dsv6 / Dasv6 / Dalsv6)"
   type        = string
-  default     = "c7i.large"
+  default     = "Standard_D2s_v6"
 }
 
-variable "intel_novbmi_instance_type" {
-  description = "Intel x86 node WITHOUT AVX-512 VBMI (t3), to prove not all x86 is affected"
+variable "intel_novbmi_vm_size" {
+  description = "Intel x86 node WITHOUT AVX-512 VBMI (B1s), to prove not all x86 is affected"
   type        = string
-  default     = "t3.micro"
+  default     = "Standard_B1s"
 }
 
-variable "arm_instance_type" {
-  description = "Instance type for the Graviton/ARM64 control node"
+variable "arm_vm_size" {
+  description = "ARM64 (Azure Cobalt 100) control node"
   type        = string
-  default     = "t4g.micro"
+  default     = "Standard_D2pls_v6"
 }
 
 # --------------------------------------------------------------------------------
@@ -78,7 +81,7 @@ variable "corretto_fixed_build" {
 # stage the tarball yourself and set corretto_affected_url_override.
 #
 # If the download fails at boot the node still comes up and stays reachable over
-# SSM — its verdict reads "UNKNOWN / JDK INSTALL FAILED", never a false verdict.
+# Run Command — its verdict reads "UNKNOWN / JDK INSTALL FAILED", never a false verdict.
 variable "corretto_affected_build" {
   description = "Corretto build string for the VULNERABLE JDK (reports upstream 21.0.13)"
   type        = string
@@ -157,7 +160,7 @@ variable "fixed_version" {
   default     = "21.0.13.1"
 }
 
-# Port the benign Base64-decode service listens on (localhost / in-VPC only).
+# Port the benign Base64-decode service listens on (localhost / in-VNet only).
 variable "decoder_port" {
   description = "TCP port for the sample Base64 decode service (the exposure surface)"
   type        = number

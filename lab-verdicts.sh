@@ -8,19 +8,19 @@ set -euo pipefail
 #   ./lab-verdicts.sh                 # all three nodes
 #   ./lab-verdicts.sh vuln-x86          # one (or several) named nodes
 #
-# For each node it runs the on-box /opt/java4shell/exposure-check.sh over SSM
+# For each node it runs the on-box /opt/java4shell/exposure-check.sh over Azure
 # Run Command and prints the result. This is only the operator fan-out: the
 # verdict comes from the portable check-exposure.sh detector on each node.
-# Nothing is reached over the network — everything goes through the SSM agent's
-# outbound channel.
+# Nothing is reached over the network — everything goes through the Azure VM
+# agent's outbound channel.
 # ================================================================================
 
 CHDIR="01-java4shell"
 POLL=10
 TIMEOUT=300
 
-REGION=$(terraform -chdir="$CHDIR" output -raw region 2>/dev/null || true)
-if [ -z "${REGION}" ]; then
+RG=$(terraform -chdir="$CHDIR" output -raw resource_group 2>/dev/null || true)
+if [ -z "${RG}" ]; then
   echo "ERROR: could not read Terraform outputs. Run ./apply.sh first."
   exit 1
 fi
@@ -34,32 +34,29 @@ else
   mapfile -t ROLES < <(echo "${NODE_IDS_JSON}" | jq -r 'keys_unsorted[]')
 fi
 
-# Wait until an instance is a registered, Online SSM managed node.
+# Wait until a node's Azure VM agent reports Ready; Run Command goes through it.
 wait_online() {
-  local id="$1" elapsed=0 status
+  local vm="$1" elapsed=0 status
   while true; do
-    status=$(aws ssm describe-instance-information --region "${REGION}" \
-      --filters "Key=InstanceIds,Values=${id}" \
-      --query 'InstanceInformationList[0].PingStatus' --output text 2>/dev/null || echo "None")
-    [ "${status}" = "Online" ] && return 0
+    status=$(az vm get-instance-view --resource-group "${RG}" --name "${vm}" \
+      --query 'instanceView.vmAgent.statuses[0].displayStatus' --output tsv 2>/dev/null || echo "None")
+    [ "${status}" = "Ready" ] && return 0
     elapsed=$((elapsed + POLL))
     [ "${elapsed}" -ge "${TIMEOUT}" ] && return 1
     sleep "${POLL}"
   done
 }
 
-# Run a command on an instance via SSM and echo its stdout.
+# Run a command on a node with Azure Run Command and echo its stdout. Run
+# Command returns stdout and stderr together in one message, as
+# "[stdout]\n...\n[stderr]\n..."; keep only the stdout section. The script runs
+# as root under /bin/sh.
 run_onbox() {
-  local id="$1" cmd="$2" cid params
-  params=$(jq -nc --arg c "${cmd}" '{commands:[$c]}')
-  cid=$(aws ssm send-command --region "${REGION}" --instance-ids "${id}" \
-    --document-name "AWS-RunShellScript" --parameters "${params}" \
-    --query 'Command.CommandId' --output text)
-  aws ssm wait command-executed --region "${REGION}" \
-    --command-id "${cid}" --instance-id "${id}" >/dev/null 2>&1 || true
-  aws ssm get-command-invocation --region "${REGION}" \
-    --command-id "${cid}" --instance-id "${id}" \
-    --query 'StandardOutputContent' --output text
+  local vm="$1" cmd="$2" msg
+  msg=$(az vm run-command invoke --resource-group "${RG}" --name "${vm}" \
+    --command-id RunShellScript --scripts "${cmd}" \
+    --query 'value[0].message' --output tsv 2>/dev/null) || true
+  printf '%s\n' "${msg}" | awk '/^\[stdout\]$/ {on=1; next} /^\[stderr\]$/ {on=0} on'
 }
 
 printf '\n%-14s %-12s %-10s %-6s %-6s %s\n' "NODE" "VERDICT" "JAVA" "ARCH" "VBMI" "REASON"
@@ -75,7 +72,7 @@ for role in "${ROLES[@]}"; do
   fi
 
   if ! wait_online "${id}"; then
-    printf '%-14s %s\n' "${role}" "ERROR: not SSM-online after ${TIMEOUT}s (${id})"
+    printf '%-14s %s\n' "${role}" "ERROR: VM agent not Ready after ${TIMEOUT}s (${id})"
     rc=1
     continue
   fi
